@@ -1,0 +1,183 @@
+#!/bin/ksh
+#
+# 
+#
+
+date2stamp () {
+#
+# $1 = date
+# $2 = time
+
+hr=$((`echo $2 | cut -c1-2`*3600))
+mn=$((`echo $2 | cut -c4-5`*60))
+PM=0
+
+idate=`date --utc --date "$1" +%s`
+[ "`echo $2 | cut -c6-7`" == "PM" ] && PM=43200 
+idate=`echo $idate+$hr+$mn+$PM | bc -l`
+echo $idate+$hr+$mn+$pm > /tmp/x
+
+#if [ "`echo $2 | cut -c6-7`" == "PM" ] ; then
+#   idate=$(($idate+43200))
+#fi
+
+echo $idate
+
+}
+
+dateDiff (){
+    case $1 in
+        -s)   sec=1;      shift;;
+        -m)   sec=60;     shift;;
+        -h)   sec=3600;   shift;;
+        -d)   sec=86400;  shift;;
+        *)    sec=86400;;
+    esac
+    diffSec=$(($2-$1))
+    if ((diffSec < 0)); then abs=-1; else abs=1; fi
+    echo $((diffSec/sec*abs))
+}
+
+PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
+
+PROGNAME=`basename $0`
+REVISION="0.1"
+
+STATE_OK=0
+STATE_WARNING=1
+STATE_CRITICAL=2
+STATE_UNKNOWN=3
+STATE_DEPENDENT=4
+
+LOG_DIR=/usr/local/crashplan/log
+LOG=history.log.0
+
+DEST_NODE="CrashPlan Central"
+
+W_UNIT="-h"
+WARN_HOURS=24
+
+C_UNIT="-h"
+CRIT_HOURS=48
+
+print_usage() {
+    echo "Usage: $PROGNAME [ -d destination ] [ -l log directory ] -w warn_period -c critical_period"
+    echo " "
+    echo "destination defaults to CrashPlan Central, if you need to pass a destination with one or more"
+    echo "spaces in the name, replace the spaces with %% in the parameter"
+    echo "for warn_period and critical_period, defaults to hours"
+    echo "  use: ##h for hours, ##d for days, ##w for weeks"
+}
+
+print_help() {
+    print_usage
+    echo "This plugin checks Crashplan Backup Set success by inspecting the backup.log.0"
+    exit 0
+}
+
+while [ "${1}" != "" ] ; do
+
+case "$1" in
+    -l | --log)
+	LOG_DIR=${2}
+        shift
+        ;;
+    -d | --destination)
+	DEST_NODE=`echo ${2} | sed "s/%%/ /g"`
+        shift
+        ;;
+    -w | --warn)
+        SFX=${2#${2%?}}
+	W_UNIT="-$SFX"
+        case $SFX in
+           h|H) w_name="hour(s)"
+                ;;
+           d|D) w_name="day(s)"
+                ;;
+           w|W) w_name="week(s)"
+                ;;
+           [0-9])
+              W_UNIT="-h"
+              w_name="hour(s)"
+	      ;;
+           *)
+	      echo "UNK: Invalid unit on ${1} parameter ($2)"
+              exit $STATE_UNKNOWN
+	      ;;
+	esac
+	WARN="${2%?}"
+        shift 
+        ;;
+    -c | --critical)
+        SFX=${2#${2%?}}
+	C_UNIT="-$SFX"
+        case $SFX in
+           h|H) c_name="hour(s)"
+                ;;
+           d|D) c_name="day(s)"
+                ;;
+           w|W) c_name="week(s)"
+                ;;
+           [0-9])
+              C_UNIT="-h" 
+              c_name="hour(s)"
+              ;;
+          *)
+	      echo "UNK: Invalid unit on ${1} parameter ($2)"
+              exit $STATE_UNKNOWN
+	      ;;
+	esac
+	CRIT="${2%?}"
+        shift 
+        ;;
+    --help|-h)
+	print_help
+	exit 0
+	;;
+esac
+shift
+
+done
+
+if [ ! -f $LOG_DIR/$LOG ] ; then
+  echo "UNK: check_crashplan couldn't find logfile $LOG_DIR/$LOG"
+  exit $STATE_UNKNOWN
+fi
+
+LAST_LOG=`cat $LOG_DIR/$LOG | grep "Completed backup"  | grep "to $DEST_NODE" | tail -1`
+if [ "$LAST_LOG" = "" ] ; then
+  echo "UNK: Found no record of any backup to destination $DEST_NODE"
+  exit $STATE_UNKNOWN
+fi
+
+LAST_LOG_BACK_HALF=`echo $LAST_LOG | awk -F: '{print $3}' | awk -F'[' '{print $1}'`
+LAST_DATE=`echo $LAST_LOG | awk -F' ' '{print $2}'`
+LAST_TIME=`echo $LAST_LOG | awk -F' ' '{print $3}'`
+
+# convert date format
+LAST_DATE=`echo $LAST_DATE | awk '{printf("20%2s-%2s-%2s",substr($1,7,2),substr($1,1,2),substr($1,4,2))}'`
+
+TS1=`date2stamp $LAST_DATE $LAST_TIME` 
+TS2=`date --utc +%s`
+
+#
+# Check for critical
+#
+LAST_CRIT=`dateDiff ${C_UNIT} $TS1 $TS2`
+if [ $CRIT -lt $LAST_CRIT ] ; then
+   echo "CRITICAL: Last $DEST_NODE backup completed $LAST_CRIT ${c_name} ago"
+   exit $STATE_CRITICAL
+fi
+
+#
+# Check for warning
+#
+if [ $WARN -lt `dateDiff ${W_UNIT} $TS1 $TS2` ] ; then
+   echo "WARNING: Last $DEST_NODE backup completed `dateDiff ${W_UNIT} $TS1 $TS2` ${w_name} ago"
+   exit $STATE_WARNING
+fi
+ 
+echo "OK: Last $DEST_NODE backup completed `dateDiff ${W_UNIT} $TS1 $TS2` ${w_name} ago"
+exit $STATE_OK
+
+
