@@ -1,7 +1,13 @@
-#!/bin/ksh
+#!/bin/ksh 
+#######################################################################################
 #
-# 
+# This script provides you a simple method for monitoring how long it has been since 
+# you last backup completed.  You can specify the destination, or it will default to
+# "CrashPlan Central"
 #
+# Copyright (c) 2014 Todd Lehr
+#
+#######################################################################################
 
 date2stamp () {
 #
@@ -14,14 +20,7 @@ PM=0
 
 idate=`date --utc --date "$1" +%s`
 [ "`echo $2 | cut -c6-7`" == "PM" ] && PM=43200 
-idate=`echo $idate+$hr+$mn+$PM | bc -l`
-echo $idate+$hr+$mn+$pm > /tmp/x
-
-#if [ "`echo $2 | cut -c6-7`" == "PM" ] ; then
-#   idate=$(($idate+43200))
-#fi
-
-echo $idate
+echo `echo $idate+$hr+$mn+$PM | bc -l`
 
 }
 
@@ -54,30 +53,66 @@ LOG=history.log.0
 
 DEST_NODE="CrashPlan Central"
 
-W_UNIT="-h"
-WARN_HOURS=24
+w_unit="-h"
+w_name="hours"
+WARN=24
 
-C_UNIT="-h"
-CRIT_HOURS=48
+c_unit="-h"
+c_name="hours"
+CRIT=48
+
+PROC_CHECK=no
 
 print_usage() {
-    echo "Usage: $PROGNAME [ -d destination ] [ -l log directory ] -w warn_period -c critical_period"
+    echo "Usage: $PROGNAME [ -p ] || [ [ -d destination ] [ -l log directory ] -w warn_period -c critical_period ]"
     echo " "
-    echo "destination defaults to CrashPlan Central, if you need to pass a destination with one or more"
-    echo "spaces in the name, replace the spaces with %% in the parameter"
-    echo "for warn_period and critical_period, defaults to hours"
-    echo "  use: ##h for hours, ##d for days, ##w for weeks"
+    echo "-p 	: Check to ensure the CrashPlan process is running, if specified all other parameters are ignored"
+    echo " "
+    echo "-d 	: Specify backup destination, defaults to 'CrashPlan Central' if not specified"
+    echo "-l	: Specify log direction, defaults to /usr/local/crashplan/log"
+    echo " "
+    echo "-w	: Warning Period, in hours, days or weeks"
+    echo "-c  	: Critical Period, in hours, days or weeks"
+    echo " "
+    echo "for the Warning and Critical periods, use ##h for hours, ##d for days, or ##w for weeks"
+    echo " "
+    echo "Example:"
+    echo "	check_crashplan -w 12h -c 1d  - Warning if more than 12 hrs, Critial is more than 1 day"
+    echo "	check_crashplan -d my.secondsite.com -w 1d -c 36h - Monitor backup to alternate location"
+    echo "	check_crashplan -p - confirm the process is running"
 }
 
 print_help() {
     print_usage
-    echo "This plugin checks Crashplan Backup Set success by inspecting the backup.log.0"
     exit 0
+}
+
+OK() {
+   echo "OK: "$*
+   exit $OK_STATE
+}
+
+WARN() {
+   echo "WARNING: "$*
+   exit $WARN_STATE
+}
+
+CRIT() {
+   echo "CRITICAL: "$*
+   exit $CRIT_STATE
+}
+
+UNK() {
+   echo "UNK: "$*
+   exit $UNKNOWN_STATE
 }
 
 while [ "${1}" != "" ] ; do
 
 case "$1" in
+    -p )
+	PROC_CHECK=yes
+        ;;
     -l | --log)
 	LOG_DIR=${2}
         shift
@@ -139,22 +174,43 @@ shift
 
 done
 
-if [ ! -f $LOG_DIR/$LOG ] ; then
-  echo "UNK: check_crashplan couldn't find logfile $LOG_DIR/$LOG"
-  exit $STATE_UNKNOWN
+#
+# are we just checking to see if the process is running?
+#
+if [ "$PROC_CHECK" = "yes" ] ; then
+   case `ps -ef | grep "\-Dapp=CrashPlanService" | grep -vc grep` in
+	0) CRIT "No CrasnPlan Service is running" ;;
+	1) OK "CrashPlan Service is running" ;;
+	2) WARN "More than 1 CrashPlan service appears to be running" ;;
+   esac
 fi
 
+###########################################################################
+# Backup Completion Check
+###########################################################################
+ 
+if [ ! -f $LOG_DIR/$LOG ] ; then
+  UNK "check_crashplan couldn't find logfile $LOG_DIR/$LOG"
+fi
+
+#
+# make sure we even have a completed backup in the first place
+#
 LAST_LOG=`cat $LOG_DIR/$LOG | grep "Completed backup"  | grep "to $DEST_NODE" | tail -1`
 if [ "$LAST_LOG" = "" ] ; then
-  echo "UNK: Found no record of any backup to destination $DEST_NODE"
-  exit $STATE_UNKNOWN
+  UNK "Found no record of any backup to destination $DEST_NODE"
 fi
 
+#
+# pull last log entry for this destination
+#
 LAST_LOG_BACK_HALF=`echo $LAST_LOG | awk -F: '{print $3}' | awk -F'[' '{print $1}'`
 LAST_DATE=`echo $LAST_LOG | awk -F' ' '{print $2}'`
 LAST_TIME=`echo $LAST_LOG | awk -F' ' '{print $3}'`
 
+#
 # convert date format
+#
 LAST_DATE=`echo $LAST_DATE | awk '{printf("20%2s-%2s-%2s",substr($1,7,2),substr($1,1,2),substr($1,4,2))}'`
 
 TS1=`date2stamp $LAST_DATE $LAST_TIME` 
@@ -165,19 +221,16 @@ TS2=`date --utc +%s`
 #
 LAST_CRIT=`dateDiff ${C_UNIT} $TS1 $TS2`
 if [ $CRIT -lt $LAST_CRIT ] ; then
-   echo "CRITICAL: Last $DEST_NODE backup completed $LAST_CRIT ${c_name} ago"
-   exit $STATE_CRITICAL
+   CRIT "Last $DEST_NODE backup completed $LAST_CRIT ${c_name} ago"
 fi
 
 #
 # Check for warning
 #
 if [ $WARN -lt `dateDiff ${W_UNIT} $TS1 $TS2` ] ; then
-   echo "WARNING: Last $DEST_NODE backup completed `dateDiff ${W_UNIT} $TS1 $TS2` ${w_name} ago"
-   exit $STATE_WARNING
+   WARN "Last $DEST_NODE backup completed `dateDiff ${W_UNIT} $TS1 $TS2` ${w_name} ago"
 fi
  
-echo "OK: Last $DEST_NODE backup completed `dateDiff ${W_UNIT} $TS1 $TS2` ${w_name} ago"
-exit $STATE_OK
+OK "Last $DEST_NODE backup completed `dateDiff ${W_UNIT} $TS1 $TS2` ${w_name} ago"
 
 
