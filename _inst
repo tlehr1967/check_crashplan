@@ -1,0 +1,12 @@
+#!/bin/ksh
+
+DEST_DIR=/etc/nagios/plugins
+FILE=check_crashplan
+
+# make backup
+sudo cp -p ${DEST_DIR}/${FILE} ${DEST_DIR}/${FILE}.previous
+
+# push new version in place
+sudo cp -p ${FILE} ${DEST_DIR}
+sudo chown nagios:nagios ${DEST_DIR}/${FILE}
+sudo chmod 755 ${DEST_DIR}/${FILE}

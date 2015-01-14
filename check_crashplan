@@ -7,8 +7,38 @@
 #
 # Copyright (c) 2014 Todd Lehr
 #
+# Version 1.0.0
+#
 #######################################################################################
 
+#
+# Defaults and environment setup
+#
+PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
+
+PROGNAME=`basename $0`
+REVISION="0.1"
+
+STATE_OK=0
+STATE_WARNING=1
+STATE_CRITICAL=2
+STATE_UNKNOWN=3
+STATE_DEPENDENT=4
+
+LOG_DIR=/usr/local/crashplan/log
+LOG=history.log.0
+
+DEST_NODE="CrashPlan Central"
+
+w_unit="-h"
+w_name="hours"
+warn_period=24
+
+c_unit="-h"
+c_name="hours"
+crit_period=48
+
+PROC_CHECK=no
 date2stamp () {
 #
 # $1 = date
@@ -37,31 +67,6 @@ dateDiff (){
     echo $((diffSec/sec*abs))
 }
 
-PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
-
-PROGNAME=`basename $0`
-REVISION="0.1"
-
-STATE_OK=0
-STATE_WARNING=1
-STATE_CRITICAL=2
-STATE_UNKNOWN=3
-STATE_DEPENDENT=4
-
-LOG_DIR=/usr/local/crashplan/log
-LOG=history.log.0
-
-DEST_NODE="CrashPlan Central"
-
-w_unit="-h"
-w_name="hours"
-WARN=24
-
-c_unit="-h"
-c_name="hours"
-CRIT=48
-
-PROC_CHECK=no
 
 print_usage() {
     echo "Usage: $PROGNAME [ -p ] || [ [ -d destination ] [ -l log directory ] -w warn_period -c critical_period ]"
@@ -140,7 +145,7 @@ case "$1" in
               exit $STATE_UNKNOWN
 	      ;;
 	esac
-	WARN="${2%?}"
+	warn_period="${2%?}"
         shift 
         ;;
     -c | --critical)
@@ -162,7 +167,7 @@ case "$1" in
               exit $STATE_UNKNOWN
 	      ;;
 	esac
-	CRIT="${2%?}"
+	crit_period="${2%?}"
         shift 
         ;;
     --help|-h)
@@ -220,14 +225,14 @@ TS2=`date --utc +%s`
 # Check for critical
 #
 LAST_CRIT=`dateDiff ${C_UNIT} $TS1 $TS2`
-if [ $CRIT -lt $LAST_CRIT ] ; then
+if [ $crit_period -lt $LAST_CRIT ] ; then
    CRIT "Last $DEST_NODE backup completed $LAST_CRIT ${c_name} ago"
 fi
 
 #
 # Check for warning
 #
-if [ $WARN -lt `dateDiff ${W_UNIT} $TS1 $TS2` ] ; then
+if [ $warn_period -lt `dateDiff ${W_UNIT} $TS1 $TS2` ] ; then
    WARN "Last $DEST_NODE backup completed `dateDiff ${W_UNIT} $TS1 $TS2` ${w_name} ago"
 fi
  
